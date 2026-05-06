@@ -72,17 +72,23 @@ The doctor detail modal in the dashboard adds another practical layer: instead o
 
 ## Live Deployment
 
-The backend API is deployed on AWS EC2: http://13.233.132.223:8000
+The full application — frontend UI, auth, chat, dashboard, and all API endpoints — is served from a single URL on AWS EC2:
+
+**http://13.233.132.223:8000**
+
+The React frontend is built with Vite and bundled into the FastAPI backend image using a multi-stage Docker build. FastAPI serves the static frontend files directly via `StaticFiles`, so there is no separate frontend server, no CORS complexity, and no HTTPS split between frontend and backend. Everything runs from the same origin on the same port.
+
+The production stack runs entirely via Docker Compose on an EC2 Ubuntu instance with four containers: the FastAPI API (which also serves the frontend), the RQ async worker, Redis, and PostgreSQL. The database schema is automatically initialised from `init.sql` on first container start. The EC2 security group exposes only ports 22 (SSH) and 8000 (application).
 
 ---
 
 ## Running Locally
 
-The backend requires Python 3.11+, PostgreSQL, and Redis. Copy `.env.example` to `.env` and fill in `DATABASE_URL`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `REDIS_URL`, and `JWT_SECRET`. Run `pip install -r requirements.txt`, apply the migration SQL files in order, then start the server with `uvicorn main:app --reload`.
+The backend requires Python 3.11+, PostgreSQL, and Redis. Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`, `OPENAI_API_KEY`, `JWT_SECRET`, and the `DB_*` variables. Run `pip install -r requirements.txt` then `uvicorn main:app --reload`.
 
-The frontend requires Node 18+. From the `frontend/` directory, run `npm install` then `npm run dev`. It proxies API requests to `http://localhost:8000` by default.
+The frontend requires Node 18+. From the `frontend/` directory, run `npm install` then `npm run dev`. The Vite dev server proxies all API paths to `http://localhost:8000` (configured in `vite.config.js`), so relative API calls work the same as in production.
 
-For the async worker on Windows, start it separately: `python -m rq worker --worker-class rq.SimpleWorker`.
+For the async worker: `python worker.py`.
 
 ---
 

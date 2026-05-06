@@ -180,8 +180,11 @@ Auth dependencies: `get_current_user` (JWT) or `rate_limit` (JWT + rate window).
 ### `main.py`
 - Creates `FastAPI` app
 - Registers middleware (outermost first): `CORSMiddleware` → `RequestLoggingMiddleware` → `APIKeyMiddleware`
-- Mounts `auth_router` at `/auth`, main `router` at `/api`
-- CORS origins: `http://localhost:5173`; credentials: `true`; headers: `Content-Type, Authorization, X-API-Key`
+- Mounts `auth_router` and main `router` (no prefix — all routes at root)
+- CORS origins: `os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")` — configurable for local dev; irrelevant in production (same origin)
+- After routers: mounts `frontend/dist/assets` as `StaticFiles` at `/assets`
+- Catch-all `GET /{full_path:path}` returns `frontend/dist/index.html` — enables React SPA refresh on any route
+- Static mount is conditional (`if Path("frontend/dist").exists()`) so the backend works without a built frontend in dev
 
 ### `app/core/`
 
@@ -539,7 +542,9 @@ App.jsx
 
 ### `src/api.js` — exported utilities
 ```js
-export const API = 'http://localhost:8000/api'
+export const API = ''   // empty string → all calls are relative (/chat, /auth/login, etc.)
+                        // In production: same-origin requests to FastAPI on port 8000
+                        // In local dev:  Vite proxy (vite.config.js) forwards to localhost:8000
 
 export function getHeaders()    // { 'Content-Type': 'application/json', 'X-API-Key': ... }
 export function getJwtHeaders() // { 'Content-Type': 'application/json', 'Authorization': 'Bearer <token>' }
@@ -847,21 +852,43 @@ Request → CORSMiddleware
 | `DB_PASSWORD`  | `app/core/config.py` | —                           |
 | `DB_HOST`      | `app/core/config.py` | `localhost`                 |
 | `DB_PORT`      | `app/core/config.py` | `5432`                      |
-| `JWT_SECRET`   | `app/core/security.py` | `"change-me-in-production"` |
+| `JWT_SECRET`   | `app/core/security.py` | required — raises `ValueError` if unset |
 | `GROQ_API_KEY` | `app/ai/client.py` | —                            |
 | `OPENAI_API_KEY` | `app/ai/model_router.py` | —                       |
-| `REDIS_URL`    | `app/core/redis_client.py` | `redis://localhost:6379` |
+| `REDIS_URL`    | `app/core/redis_client.py`, `queue_service.py`, `worker.py` | `redis://localhost:6379/0` |
+| `CORS_ORIGINS` | `main.py` | `http://localhost:5173` (comma-separated list) |
 
 ---
 
-## 9. Local Dev Process Map
+## 9. Process Map
 
+### Local Dev
 ```
-npm run dev          → Vite at :5173  (frontend)
-uvicorn main:app     → FastAPI at :8000
+npm run dev          → Vite at :5173  (proxies API paths → :8000 via vite.config.js)
+uvicorn main:app     → FastAPI at :8000 (no StaticFiles in dev — dist not built)
 python worker.py     → RQ SimpleWorker (async jobs)
 redis-server         → Redis at :6379 (portable binary on Windows)
 PostgreSQL           → :5432
 ```
 
-All cross-origin requests from `:5173` → `:8000` are handled by `CORSMiddleware` with `allow_credentials=True` and explicit `Authorization` header allowance.
+Cross-origin requests from `:5173` → `:8000` pass through `CORSMiddleware`. The Vite proxy handles API forwarding so the browser sees same-origin requests.
+
+### Production (Docker Compose on EC2)
+```
+docker compose up --build
+  │
+  ├── node:18-slim  (build stage)
+  │     npm ci && npm run build → frontend/dist/
+  │
+  ├── api  (python:3.11-slim, port 8000)
+  │     uvicorn main:app --host 0.0.0.0 --port 8000
+  │     serves: API routes + /assets StaticFiles + SPA fallback
+  │
+  ├── worker  (same image, no port)
+  │     python worker.py → RQ SimpleWorker
+  │
+  ├── redis:7   (internal :6379)
+  └── db:postgres:15  (internal :5432, init.sql on first start)
+
+Live URL: http://13.233.132.223:8000
+```

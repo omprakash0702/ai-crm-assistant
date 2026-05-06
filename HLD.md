@@ -208,15 +208,42 @@ LangChain tools receive `user_id` via a `ContextVar` (`current_user_id`) set in 
 
 ---
 
-## 8. Deployment Topology (Local Dev)
+## 8. Deployment Topology
 
+### Local Dev
 ```
 localhost:5173  →  Vite dev server (React)
+                   (proxies /auth, /chat, /interactions, etc. → localhost:8000)
 localhost:8000  →  Uvicorn (FastAPI)
 localhost:5432  →  PostgreSQL
 localhost:6379  →  Redis (portable binary)
-                   RQ worker (python worker.py)
+                   python worker.py  (RQ SimpleWorker)
 ```
+
+### Production (AWS EC2 — Docker Compose)
+```
+http://13.233.132.223:8000
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│  Docker Network (ai-crm_default)                │
+│                                                 │
+│  api (python:3.11-slim)                         │
+│    Uvicorn → FastAPI                            │
+│      · /auth, /chat, /interactions, ...  →  API │
+│      · /assets/*                        →  StaticFiles (frontend/dist) │
+│      · /*                               →  index.html (SPA fallback)   │
+│                                                 │
+│  worker (same image)                           │
+│    python worker.py → RQ SimpleWorker          │
+│                                                 │
+│  redis:7          (internal port 6379)          │
+│  db:postgres:15   (internal port 5432)          │
+│    init.sql auto-runs on first start            │
+└─────────────────────────────────────────────────┘
+```
+
+The React frontend is built inside a `node:18-slim` stage of the Dockerfile, and the resulting `dist/` folder is copied into the Python image. FastAPI serves it via `StaticFiles` — no separate frontend server, no CORS issues, single origin.
 
 ---
 
@@ -231,3 +258,7 @@ localhost:6379  →  Redis (portable binary)
 | Redis fails open for rate limiting | If Redis goes down, the API stays up — rate limiting degrades gracefully |
 | Argon2 over bcrypt | More memory-hard, recommended by OWASP for new systems |
 | Separate `normalize_doctor_name` and `formal_doctor_name` | Dedup key (strips Dr., lowercases) must differ from display value (Dr. Title Case) |
+| Frontend served from FastAPI `StaticFiles` | Eliminates CORS, removes need for a separate frontend server or HTTPS split; single Docker image serves everything |
+| Multi-stage Docker build (Node → Python) | Frontend is built reproducibly inside Docker; no pre-built `dist/` needed in the repo |
+| Single EC2 port (8000) for everything | Simplifies security group rules; no load balancer or reverse proxy needed at this scale |
+| `init.sql` auto-run by Postgres container | Schema is applied automatically on first boot; no manual migration step needed after `docker compose up` |
