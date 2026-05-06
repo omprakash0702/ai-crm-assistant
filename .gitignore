@@ -26,6 +26,8 @@ dump.rdb
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/.env
+frontend/.env.*
 
 # ── OS & editor ───────────────────────────────────────────────────────────────
 .DS_Store
