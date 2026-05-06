@@ -17,3 +17,4 @@ langchain-openai==1.2.1
 langgraph==1.1.9
 langgraph-prebuilt==1.0.10
 httpx==0.28.1
+aiofiles==24.1.0

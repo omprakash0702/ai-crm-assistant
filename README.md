@@ -70,6 +70,12 @@ The doctor detail modal in the dashboard adds another practical layer: instead o
 
 ---
 
+## Live Deployment
+
+The backend API is deployed on AWS EC2: http://13.233.132.223:8000
+
+---
+
 ## Running Locally
 
 The backend requires Python 3.11+, PostgreSQL, and Redis. Copy `.env.example` to `.env` and fill in `DATABASE_URL`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `REDIS_URL`, and `JWT_SECRET`. Run `pip install -r requirements.txt`, apply the migration SQL files in order, then start the server with `uvicorn main:app --reload`.

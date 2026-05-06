@@ -1,6 +1,9 @@
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.api.routes import router
 from app.auth.router import router as auth_router
 from app.core.auth import APIKeyMiddleware
@@ -26,3 +29,12 @@ app.add_middleware(APIKeyMiddleware)
 
 app.include_router(auth_router)
 app.include_router(router)
+
+# Serve React frontend — must come after API routers so API routes take priority
+_DIST = Path("frontend/dist")
+if _DIST.exists():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        return FileResponse(_DIST / "index.html")
