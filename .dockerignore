@@ -22,10 +22,13 @@ build/
 *.rdb
 dump.rdb
 
-# ── Frontend (Node / Vite / React) ────────────────────────────────────────────
+# ── Frontend (build input — Docker builds this separately or copies dist) ──────
 frontend/node_modules/
-frontend/dist/
 frontend/.vite/
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
 
 # ── OS & editor ───────────────────────────────────────────────────────────────
 .DS_Store
@@ -47,6 +50,11 @@ htmlcov/
 # ── Type checking ─────────────────────────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
+
+# ── Docs ──────────────────────────────────────────────────────────────────────
+README.md
+HLD.md
+LLD.md
 
 # ── Dev/one-off scripts (not needed for deployment) ───────────────────────────
 check_db.py

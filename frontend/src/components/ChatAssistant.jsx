@@ -1,12 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
-
-const API = 'http://localhost:8000'
+import { API, getJwtHeaders, apiFetch } from '../api'
 
 const HINTS = [
   'Met Dr. Patel, discussed Metformin',
   'What should I do next after visiting Dr. Roy?',
   'Summarize: Dr. Sharma was interested in the diabetes drug...',
-  'Update ID 3: add that samples were requested',
 ]
 
 export default function ChatAssistant({ onSuccess }) {
@@ -31,10 +29,15 @@ export default function ChatAssistant({ onSuccess }) {
     setMessages(m => [...m, { role: 'user', text }])
     setLoading(true)
     try {
-      const res = await fetch(`${API}/chat`, {
+      const history = messages
+        .filter(m => m.role !== 'agent' || messages.indexOf(m) !== 0)
+        .slice(-10)
+        .map(m => ({ role: m.role, text: m.text }))
+
+      const res = await apiFetch(`${API}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        headers: getJwtHeaders(),
+        body: JSON.stringify({ message: text, history }),
       })
       const data = await res.json()
       const reply = res.ok ? data.response : (data.detail || 'Something went wrong.')

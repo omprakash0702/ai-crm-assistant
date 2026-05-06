@@ -1,6 +1,5 @@
 import { useState } from 'react'
-
-const API = 'http://localhost:8000'
+import { API, getJwtHeaders, apiFetch } from '../api'
 
 const SENTIMENT_STYLE = {
   Positive: { idle: 'border-green-300 bg-green-50 text-green-700', active: 'border-green-500 bg-green-500 text-white' },
@@ -26,9 +25,9 @@ export default function InteractionForm({ onSuccess }) {
     setLoading(true)
     setStatus(null)
     try {
-      const res = await fetch(`${API}/log-structured-interaction`, {
+      const res = await apiFetch(`${API}/log-structured-interaction`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getJwtHeaders(),
         body: JSON.stringify(form),
       })
       const data = await res.json()

@@ -1,97 +1,110 @@
 # AI CRM Assistant
 
-An intelligent CRM assistant built for pharmaceutical sales representatives. It enables reps to log doctor interactions, retrieve history, summarize notes, extract key entities, and receive context-aware next-step suggestions — all through a natural language chat interface powered by a large language model.
+AI CRM Assistant is a field sales tool built for pharmaceutical sales representatives. The core idea is that a rep should be able to open a chat window and say "met Dr. Patel, discussed Metformin, he was interested" and have that automatically parsed, classified, and stored — without filling in a form. The same interface lets them ask what to do next with a specific doctor, get a quick summary of past interactions, or extract structured details from rough notes.
 
 ---
 
-## Features
+## What the Project Does
 
-- **Log Interactions** — Record doctor visits and meetings with automatic name extraction, sentiment analysis, and follow-up suggestion
-- **Edit Interactions** — Update notes on any existing interaction by ID
-- **Summarize Notes** — Get a concise 1–2 sentence summary of logged interactions pulled directly from the database
-- **Extract Entities** — Identify doctor name, product, location, and date from any text
-- **Suggest Next Action** — Receive one specific, context-aware CRM action based on real logged history
-- **Duplicate Detection** — Automatically detects near-identical entries (85% similarity threshold) and prompts before re-logging
-- **New Entry Override** — Allows intentional re-logging via `new entry:` prefix
-- **DB-Backed Responses** — All answers are grounded in real database records; no hallucinated names or details
-- **Honest No-Entry Handling** — Returns a clear message when a queried doctor has no records in the CRM
+The application has two primary surfaces: a chat assistant and a structured dashboard. The chat assistant accepts free-text input and routes it to one of five AI-backed operations — logging a new interaction, editing an existing one, summarizing a doctor's history, extracting entities from text, or suggesting a next action. The dashboard shows aggregate metrics (total interactions, top doctors by volume), and clicking any doctor name opens a modal that pulls their full interaction timeline and formats every note into a clean formal sentence using a separate AI call.
+
+Behind the chat is a FastAPI backend with PostgreSQL for storage, Redis for caching and lightweight counters, and RQ for asynchronous job processing. Authentication uses JWT tokens with Argon2 password hashing.
 
 ---
 
-## Tech Stack
+## How AI Is Used
 
-| Layer | Technology |
-|---|---|
-| Backend API | FastAPI (Python) |
-| Database | PostgreSQL |
-| DB Driver | psycopg2 |
-| AI Framework | LangGraph + LangChain |
-| LLM Provider | Groq |
-| LLM Model | llama-3.1-8b-instant |
-| Frontend | React 18 + Vite |
-| Styling | Tailwind CSS |
-| Environment | python-dotenv |
-| Similarity Matching | difflib (SequenceMatcher) |
+The system uses LangChain and LangGraph to define five tools, each decorated with `@tool` and registered in a `create_react_agent` graph. However, it is important to be precise about what "agentic" means here: the LLM does not decide which tool to call. Routing is handled entirely by a deterministic Python keyword router before any LLM is involved. Once the route is decided, the corresponding tool is called directly. The agent graph is initialized and the tools are properly registered, but the agentic loop (where the model reasons about which tool to use next) is not the active dispatch path.
+
+Within each tool, the LLM does real work. The `log_interaction` tool sends the user's raw message to Groq and asks it to extract a structured record: doctor name, interaction type, sentiment, products discussed, and a follow-up suggestion. That structured output is then written to PostgreSQL. The `suggest_next_action` tool fetches the doctor's actual interaction history from the database and asks the LLM for one specific, grounded next step — the model is not inventing context, it is reasoning over real records. The `summarize_text` and `extract_entities` tools similarly ground the LLM in database-fetched or user-provided text.
+
+There is also a separate AI path that is not part of the chat at all: when a user opens the doctor detail modal in the dashboard, the frontend fetches the timeline and then fires a single `POST /format-notes` request. The backend sends all notes from that timeline in one batched LLM call, prefixing each note with its interaction type (e.g., `[Call]`, `[Visit]`, `[Meeting]`), and the model returns one clean formal sentence per note. This keeps the dashboard readable without requiring the rep to write formal notes in the field.
 
 ---
 
-## AI & LangGraph Details
+## How Agentic Is It
 
-### LLM — Groq (llama-3.1-8b-instant)
-Used for all natural language tasks: doctor name extraction, sentiment classification, note summarization, entity extraction, and next-step suggestion. Chosen for low-latency inference suitable for real-time chat.
+Honestly: partially. The project uses the LangGraph and LangChain infrastructure correctly — tools are defined, the agent is created, context injection works — but the routing decision is made by Python, not by the model. This is a deliberate trade-off: keyword routing is deterministic, zero-latency, and fully predictable. If a sales rep types "summarize Dr. Sharma's notes", you do not want the system to occasionally decide to log instead. The keyword router makes that impossible.
 
-### LangGraph — `@tool` + `create_react_agent`
-All five tool functions are decorated with LangGraph's `@tool` decorator and registered in a `create_react_agent` graph. In the current architecture, routing is handled deterministically (see below) and tools are invoked directly — the agent graph is initialized and available but not used for live request dispatch.
-
-### LangChain — `ChatGroq`, `SystemMessage`, `HumanMessage`
-All LLM calls are made through LangChain's Groq integration with a strict system prompt applied globally to prevent hallucination, narrative drift, and uncertain phrasing.
-
-### Five LangGraph Tools
-
-| Tool | Function |
-|---|---|
-| `log_interaction` | Extracts doctor name + structured fields via LLM, writes to PostgreSQL, builds confirmation from parsed values |
-| `edit_interaction` | Fetches doctor name from DB by ID, updates notes, returns deterministic confirmation — no LLM call |
-| `summarize_text` | Fetches real notes from DB by doctor name, summarizes using LLM; returns "no entry" if doctor not found |
-| `extract_entities` | Extracts doctor, product, location, date from text; appends DB history count if doctor is already logged |
-| `suggest_next_action` | Pulls DB history for the named doctor (or most recent interaction) and suggests one specific next step |
-
-### Deterministic Router
-All requests are dispatched by a keyword-based Python router with zero LLM calls. This keeps latency low and routing fully predictable. Tools are called directly via `.invoke()` — no agent loop overhead.
-
-### Duplicate Detection
-Uses `difflib.SequenceMatcher` to compare incoming text against the 20 most recent interaction notes. If similarity is ≥ 85%, the entry is flagged as a duplicate and the user is prompted to confirm before re-logging.
+Where the system is genuinely AI-driven is inside the tools themselves. The `log_interaction` tool does real structured extraction from natural language. The `suggest_next_action` tool produces personalized recommendations from actual history. The batch formatting in the dashboard runs an LLM call that rewrites raw field notes into professional sentences. These are all cases where a rule-based approach would fail or be too brittle.
 
 ---
 
-## Workflow
+## Message Routing in Detail
+
+Every chat message passes through `_route()` in `app/ai/router.py` before touching the LLM. The router checks the lowercased message for keyword patterns and returns a route label. Messages containing "update", "edit", "change", or a bare interaction ID are routed to `edit_interaction`. Messages containing "summarize" or "summary" go to `summarize_text`. Messages with "extract", "identify", "who", "what product", or "where" go to `extract_entities`. Messages with "suggest", "recommend", "what should", "next step", or "plan" go to `suggest_next_action`. Everything else defaults to `log_interaction`.
+
+For the suggest, summarize, and extract routes, the router also scans the last ten messages in the conversation history for the most recently mentioned doctor name. If found, it appends `(about Dr. X)` to the user's message before passing it to the tool. This lets the rep say "what should I do next?" without repeating the doctor's name, and the tool still has enough context to fetch the right records.
+
+---
+
+## Dual-Model Routing and Resilience
+
+Not all tasks need the same model. Fast, straightforward tasks — logging, editing, summarizing, extracting — use Groq's `llama-3.1-8b-instant`, which responds in under a second. Tasks that require more reasoning — specifically `suggest_next_action` — use OpenAI's `gpt-4o-mini`.
+
+Every LLM call goes through `invoke_routed()` in `app/ai/model_router.py`, which retries up to three times with a five-second timeout per attempt. If all retries fail on one provider, the call automatically falls back to the other. Retry counts and final failure counts are tracked in Redis and exposed via `/metrics/system`, so you can see how often the system had to recover without changing any of the retry behavior itself.
+
+---
+
+## Why These Technologies
+
+FastAPI was chosen because it is fast to develop with, generates automatic OpenAPI docs, and handles dependency injection cleanly — the `Depends(get_current_user)` pattern keeps auth out of every route handler. PostgreSQL is the primary store because the data is relational (users, doctors, interactions, follow-ups all reference each other by foreign key) and SQL makes the aggregate queries for the dashboard straightforward.
+
+Redis serves two roles: it caches expensive database reads for frequently visited doctor profiles, and it acts as a lightweight counter store for metrics (cache hits/misses, retry counts, failed requests, total jobs enqueued). Using Redis for metrics avoids adding a column to PostgreSQL for every counter.
+
+RQ (Redis Queue) handles async jobs — right now, the summarize-async endpoint. On Windows, RQ's standard forking worker does not work, so the project uses `SimpleWorker`, which runs jobs in the same process. This is a known limitation noted in the configuration.
+
+Groq was chosen for its inference speed on the `llama-3.1-8b-instant` model — it is genuinely fast enough for real-time chat. OpenAI's `gpt-4o-mini` was added for the suggestion route because it produces more coherent, context-sensitive recommendations for the next-action use case. Argon2 was chosen for password hashing because it is the current best practice (winner of the Password Hashing Competition) and substantially more resistant to GPU cracking than bcrypt. JWT HS256 was chosen for stateless auth because the application is single-server and does not need the complexity of asymmetric keys.
+
+React with Vite and Tailwind was chosen for the frontend because Vite's dev server is fast and Tailwind keeps the component styling consistent without a separate CSS file per component. There is no client-side router; navigation is handled with React state, which is sufficient for an application of this scope.
+
+---
+
+## Why This Project Is Useful
+
+Pharmaceutical sales representatives interact with dozens of doctors each week. They need to log those interactions quickly, remember context before a follow-up visit, and have some way of knowing which doctors to prioritize. Existing CRM tools require them to fill in forms field by field, which reps often skip or do after the fact when details are already fuzzy.
+
+The chat interface removes that friction. A rep can type a sentence on their phone right after leaving the clinic, and the system handles parsing, classification, sentiment analysis, and follow-up extraction automatically. The suggestion tool means they do not have to remember which doctor was last visited four weeks ago and what was discussed — they can ask, and get a grounded answer based on actual records.
+
+The doctor detail modal in the dashboard adds another practical layer: instead of reading raw notes like "disc met. interested. follow next wk", the rep sees "Dr. Sharma expressed interest in the product during the call and requested a follow-up meeting next week." That rewriting is done by the AI in one batch call, not one-by-one, keeping it fast.
+
+---
+
+## Running Locally
+
+The backend requires Python 3.11+, PostgreSQL, and Redis. Copy `.env.example` to `.env` and fill in `DATABASE_URL`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `REDIS_URL`, and `JWT_SECRET`. Run `pip install -r requirements.txt`, apply the migration SQL files in order, then start the server with `uvicorn main:app --reload`.
+
+The frontend requires Node 18+. From the `frontend/` directory, run `npm install` then `npm run dev`. It proxies API requests to `http://localhost:8000` by default.
+
+For the async worker on Windows, start it separately: `python -m rq worker --worker-class rq.SimpleWorker`.
+
+---
+
+## Project Structure
 
 ```
-User Message (Chat UI)
-        │
-        ▼
-FastAPI  /chat  endpoint
-        │
-        ▼
-Deterministic Router  (_route)
-  ├── "update/edit" + ID  →  edit_interaction
-  ├── "summarize/summary" →  summarize_text
-  ├── "extract/identify"  →  extract_entities
-  ├── "suggest/next step" →  suggest_next_action
-  └── default             →  log_interaction
-        │
-        ▼
-Tool Execution
-  ├── DB lookup  (PostgreSQL via psycopg2)
-  ├── LLM call   (Groq via LangChain)  [if needed]
-  └── DB write   (INSERT / UPDATE)     [if needed]
-        │
-        ▼
-Natural Language Response  →  Chat UI
+app/
+  api/routes.py          — all API endpoints
+  ai/
+    router.py            — keyword-based message router
+    model_router.py      — dual-model dispatch with retry/fallback
+    tools.py             — five LangChain @tool functions
+    agent.py             — LangGraph create_react_agent setup
+  core/
+    auth.py              — JWT decode + get_current_user dependency
+    rate_limit.py        — per-user request rate limiting
+    redis_client.py      — cache, counters, resilience stats
+  models/schemas.py      — Pydantic request/response models
+  services/
+    crm_service.py       — all database read/write operations
+    ai_service.py        — chat() and format_notes_batch()
+    queue_service.py     — RQ enqueue and metrics
+    metrics_service.py   — system metrics aggregation
+frontend/src/
+  components/
+    ChatAssistant.jsx    — main chat UI
+    Dashboard.jsx        — metrics dashboard with doctor modal
+    SystemPage.jsx       — infrastructure and AI metrics
+    InteractionList.jsx  — recent interactions table
+    LogForm.jsx          — structured interaction form
 ```
-
----
-
-## Conclusion
-
-AI CRM Assistant demonstrates how large language models can be integrated into a real business workflow without sacrificing reliability or accuracy. By combining a strict system prompt, deterministic routing, database-grounded responses, and LangGraph tool registration, the system delivers consistent, hallucination-free output that a sales representative can trust in a live demo or production setting. The architecture keeps LLM calls minimal and purposeful — every response is backed by either real database records or explicitly provided text, never imagination.

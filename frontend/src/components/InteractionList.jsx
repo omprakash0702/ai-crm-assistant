@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const API = 'http://localhost:8000'
+import { API, getJwtHeaders, apiFetch } from '../api'
 
 const SENTIMENT_BADGE = {
   Positive: 'bg-green-100 text-green-700',
@@ -19,6 +18,13 @@ function formatDate(iso) {
   return new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+function formalName(name) {
+  if (!name) return name
+  const clean = name.replace(/^dr\.?\s*/i, '').trim()
+  if (!clean) return name
+  return 'Dr. ' + clean.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+}
+
 export default function InteractionList({ refresh }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -27,7 +33,7 @@ export default function InteractionList({ refresh }) {
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`${API}/interactions`)
+    apiFetch(`${API}/interactions`, { headers: getJwtHeaders() })
       .then(r => r.json())
       .then(data => { setRows(data); setLoading(false) })
       .catch(err => { setError(err.message); setLoading(false) })
@@ -56,7 +62,7 @@ export default function InteractionList({ refresh }) {
               {/* Header */}
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900 text-sm truncate">{item.doctor_name}</p>
+                  <p className="font-semibold text-gray-900 text-sm truncate">{formalName(item.doctor_name)}</p>
                   <p className="text-xs text-gray-400 mt-0.5">#{item.id} · {formatDate(item.created_at)}</p>
                 </div>
                 <div className="flex gap-1.5 flex-shrink-0">
