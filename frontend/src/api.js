@@ -1,4 +1,4 @@
-export const API = 'http://localhost:8000'
+export const API = 'http://13.233.132.223:8000'
 
 export function getHeaders() {
   return {
